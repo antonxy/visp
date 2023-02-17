@@ -26,6 +26,18 @@ fn col_nr_to_label(col: u16) -> String {
     }
 }
 
+fn add_clamp(val: &mut u16) {
+    if *val < u16::MAX {
+        *val += 1;
+    }
+}
+
+fn sub_clamp(val: &mut u16, min: u16) {
+    if *val > min {
+        *val -= 1;
+    }
+}
+
 fn main() -> Result<(), io::Error> {
     // setup terminal
     enable_raw_mode()?;
@@ -34,7 +46,7 @@ fn main() -> Result<(), io::Error> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut content = TableContent{
+    let table_content = TableContent{
         cells: vec![
             vec![TableCell::String("Value".to_string()), TableCell::Value(10), TableCell::Value(10)],
             vec![TableCell::String("Value".to_string()), TableCell::Value(20), TableCell::Value(10)],
@@ -51,30 +63,55 @@ fn main() -> Result<(), io::Error> {
         },
     };
 
+    let mut state = AppState {
+        table_content,
+        mode: AppMode::Normal,
+    };
+
     loop {
-        terminal.draw(|f| ui(f, &content))?;
+        terminal.draw(|f| ui(f, &state))?;
 
         // Wait up to 1s for another event
         if crossterm::event::poll(Duration::from_millis(1_000))? {
             // It's guaranteed that read() won't block if `poll` returns `Ok(true)`
             let event = crossterm::event::read()?;
 
-            if event == Event::Key(KeyCode::Char('j').into()) {
-                content.selection.row = content.selection.row.saturating_add(1);
-            }
-            if event == Event::Key(KeyCode::Char('k').into()) {
-                content.selection.row = content.selection.row.saturating_sub(1);
-            }
-            if event == Event::Key(KeyCode::Char('l').into()) {
-                content.selection.col = content.selection.col.saturating_add(1);
-            }
-            if event == Event::Key(KeyCode::Char('h').into()) {
-                content.selection.col = content.selection.col.saturating_sub(1);
+            if state.mode == AppMode::Normal {
+                if event == Event::Key(KeyCode::Char('j').into()) {
+                    add_clamp(&mut state.table_content.selection.row);
+                }
+                if event == Event::Key(KeyCode::Char('k').into()) {
+                    sub_clamp(&mut state.table_content.selection.row, 0);
+                }
+                if event == Event::Key(KeyCode::Char('l').into()) {
+                    add_clamp(&mut state.table_content.selection.col);
+                }
+                if event == Event::Key(KeyCode::Char('h').into()) {
+                    sub_clamp(&mut state.table_content.selection.col, 0);
+                }
+            } else if state.mode == AppMode::Visual {
+                if event == Event::Key(KeyCode::Char('j').into()) {
+                    add_clamp(&mut state.table_content.selection.rows);
+                }
+                if event == Event::Key(KeyCode::Char('k').into()) {
+                    sub_clamp(&mut state.table_content.selection.rows, 1);
+                }
+                if event == Event::Key(KeyCode::Char('l').into()) {
+                    add_clamp(&mut state.table_content.selection.cols);
+                }
+                if event == Event::Key(KeyCode::Char('h').into()) {
+                    sub_clamp(&mut state.table_content.selection.cols, 1);
+                }
             }
 
             if event == Event::Key(KeyCode::Esc.into()) {
-                break;
+                state.mode = AppMode::Normal;
+                state.table_content.selection.set_single();
             }
+            if event == Event::Key(KeyCode::Char('v').into()) {
+                state.mode = AppMode::Visual;
+            }
+
             if event == Event::Key(KeyCode::Char('q').into()) {
                 break;
             }
@@ -91,6 +128,17 @@ fn main() -> Result<(), io::Error> {
     terminal.show_cursor()?;
 
     Ok(())
+}
+
+struct AppState {
+    table_content: TableContent,
+    mode: AppMode,
+}
+
+#[derive(PartialEq)]
+enum AppMode {
+    Normal,
+    Visual
 }
 
 enum TableCell {
@@ -118,12 +166,19 @@ struct Selection {
 }
 
 impl Selection {
+    fn set_single(&mut self) {
+        self.rows = 1;
+        self.cols = 1;
+    }
+
     fn row_selected(&self, row: u16) -> bool {
         row >= self.row && row < self.row + self.rows
     }
+
     fn col_selected(&self, col: u16) -> bool {
         col >= self.col && col < self.col + self.cols
     }
+
     fn selected(&self, row: u16, col: u16) -> bool {
         self.row_selected(row) && self.col_selected(col)
     }
@@ -218,7 +273,7 @@ impl<'a> Widget for Table<'a> {
 }
 
 
-fn ui<B: Backend>(f: &mut Frame<B>, content: &TableContent) {
+fn ui<B: Backend>(f: &mut Frame<B>, state: &AppState) {
    let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(0)
@@ -230,7 +285,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, content: &TableContent) {
         )
         .split(f.size());
 
-    let table = Table {content};
+    let table = Table {content: &state.table_content};
     f.render_widget(table, chunks[0]);
 
     let command_line = Paragraph::new("Command");
