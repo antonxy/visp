@@ -17,6 +17,15 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 
+fn col_nr_to_label(col: u16) -> String {
+    if col < 26 {
+        char::from_u32('A' as u32 + col as u32).unwrap().to_string()
+    } else {
+        let front = col / 26;
+        col_nr_to_label(front - 1) + &col_nr_to_label(col - (26 * front))
+    }
+}
+
 fn main() -> Result<(), io::Error> {
     // setup terminal
     enable_raw_mode()?;
@@ -109,9 +118,14 @@ struct Selection {
 }
 
 impl Selection {
-    fn selected(&self, row: u16, col: u16) -> bool {
+    fn row_selected(&self, row: u16) -> bool {
         row >= self.row && row < self.row + self.rows
-            && col >= self.col && col < self.col + self.cols
+    }
+    fn col_selected(&self, col: u16) -> bool {
+        col >= self.col && col < self.col + self.cols
+    }
+    fn selected(&self, row: u16, col: u16) -> bool {
+        self.row_selected(row) && self.col_selected(col)
     }
 }
 
@@ -128,9 +142,11 @@ struct Table<'a> {
 
 impl<'a> Widget for Table<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let header_style = Style::default().add_modifier(Modifier::BOLD);
         let column_style = Style::default();
         let selected_column_style = Style::default().fg(Color::White).bg(Color::Black);
+
+        let header_style = column_style.add_modifier(Modifier::BOLD);
+        let selected_header_style = selected_column_style.add_modifier(Modifier::BOLD);
 
         let draw_cell = |buf: &mut Buffer, cell: Option<&TableCell>, rect: Rect, selected: bool| {
             let style = if selected {
@@ -169,15 +185,25 @@ impl<'a> Widget for Table<'a> {
                         draw_cell(buf, cell, Rect::new(x, y, col_width, row_height).intersection(area), selected);
                     } else {
                         // Header column
-                        buf.set_string(x, y, format!("{}", row), header_style);
+                        let style = if self.content.selection.row_selected(table_row as u16) {
+                            selected_header_style
+                        } else {
+                            header_style
+                        };
+                        buf.set_string(x, y, format!("{}", row), style);
                     }
 
                 } else {
                     // Header row
-                    if col == 0 {
-                        buf.set_string(x, y, "**", header_style);
+                    if let Some(table_col) = table_col {
+                        let style = if self.content.selection.col_selected(table_col as u16) {
+                            selected_header_style
+                        } else {
+                            header_style
+                        };
+                        buf.set_string(x, y, col_nr_to_label(table_col as u16), style);
                     } else {
-                        buf.set_string(x, y, format!("{}", col), header_style);
+                        buf.set_string(x, y, "**", header_style);
                     }
                 }
 
