@@ -1,3 +1,5 @@
+// VISP: VI-style SPreadsheet
+
 use std::{io, thread, time::Duration};
 use tui::{
     backend::Backend,
@@ -23,18 +25,49 @@ fn main() -> Result<(), io::Error> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let content = TableContent{
+    let mut content = TableContent{
         cells: vec![
-            vec![TableCell::String("Value".to_string()), TableCell::Value(10)],
-            vec![TableCell::String("Value".to_string()), TableCell::Value(20)],
+            vec![TableCell::String("Value".to_string()), TableCell::Value(10), TableCell::Value(10)],
+            vec![TableCell::String("Value".to_string()), TableCell::Value(20), TableCell::Value(10)],
+            vec![TableCell::String("Value".to_string()), TableCell::Value(20), TableCell::Value(10)],
+            vec![TableCell::String("Value".to_string()), TableCell::Value(20), TableCell::Value(10)],
         ],
         col_widths: vec![10, 5],
         row_heights: vec![1, 2],
+        selection: Selection {
+            row: 0,
+            col: 0,
+            rows: 1,
+            cols: 1,
+        },
     };
 
-    terminal.draw(|f| ui(f, &content))?;
+    loop {
+        terminal.draw(|f| ui(f, &content))?;
 
-    thread::sleep(Duration::from_millis(5000));
+        // Wait up to 1s for another event
+        if crossterm::event::poll(Duration::from_millis(1_000))? {
+            // It's guaranteed that read() won't block if `poll` returns `Ok(true)`
+            let event = crossterm::event::read()?;
+
+            if event == Event::Key(KeyCode::Char('j').into()) {
+                content.selection.row += 1;
+            }
+            if event == Event::Key(KeyCode::Char('k').into()) {
+                content.selection.row -= 1;
+            }
+            if event == Event::Key(KeyCode::Char('l').into()) {
+                content.selection.col += 1;
+            }
+            if event == Event::Key(KeyCode::Char('h').into()) {
+                content.selection.col -= 1;
+            }
+
+            if event == Event::Key(KeyCode::Esc.into()) {
+                break;
+            }
+        }
+    }
 
     // restore terminal
     disable_raw_mode()?;
@@ -62,10 +95,26 @@ impl TableCell {
     }
 }
 
+#[derive(Default)]
+struct Selection {
+    row: u16,
+    col: u16,
+    rows: u16,
+    cols: u16,
+}
+
+impl Selection {
+    fn selected(&self, row: u16, col: u16) -> bool {
+        row >= self.row && row < self.row + self.rows
+            && col >= self.col && col < self.col + self.cols
+    }
+}
+
 struct TableContent {
     cells: Vec<Vec<TableCell>>, // row major
     col_widths: Vec<u16>,
     row_heights: Vec<u16>,
+    selection: Selection
 }
 
 struct Table<'a> {
@@ -76,6 +125,7 @@ impl<'a> Widget for Table<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let header_style = Style::default().add_modifier(Modifier::BOLD);
         let column_style = Style::default();
+        let selected_column_style = Style::default().add_modifier(Modifier::BOLD);
 
         let mut row = 0; //Table row col
         let mut y = area.y; //Buffer position
@@ -98,11 +148,18 @@ impl<'a> Widget for Table<'a> {
                         // Header column
                         buf.set_string(x, y, format!("{}", row), header_style);
                     } else {
+                        let table_row : u16 = (row - 1).try_into().unwrap();
+                        let table_col : u16 = (col - 1).try_into().unwrap();
                         // Table content
-                        let content : Option<&TableCell> = self.content.cells.get(row - 1).and_then(|r| r.get(col - 1));
+                        let content : Option<&TableCell> = self.content.cells.get(table_row as usize).and_then(|r| r.get(table_col as usize));
                         if let Some(c) = content {
                             //TODO overflow
-                            buf.set_string(x, y, c.format_string(), column_style);
+                            let style = if self.content.selection.selected(table_row, table_col) {
+                                selected_column_style
+                            } else {
+                                column_style
+                            };
+                            buf.set_string(x, y, c.format_string(), style);
                         }
                     }
                 }
@@ -129,9 +186,6 @@ fn ui<B: Backend>(f: &mut Frame<B>, content: &TableContent) {
         )
         .split(f.size());
 
-    let block = Block::default()
-         .title("Block")
-         .borders(Borders::ALL);
     let table = Table {content};
     f.render_widget(table, chunks[0]);
 
